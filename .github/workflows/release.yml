@@ -1,6 +1,7 @@
 name: Release
 
 # 打 tag（v1.2.3）即自动出包并发布 Release；也可以在 Actions 页手动跑一次只出产物。
+# 【修改版】安卓签名不再强制依赖仓库 Secret —— 未配置时会在构建机上现场生成一份临时密钥。
 on:
   push:
     tags: ["v*"]
@@ -31,7 +32,7 @@ jobs:
             V="$(node -p "require('./src-tauri/tauri.conf.json').version")"
           fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
-          node -e "const fs=require('fs');for(const p of ['src-tauri/tauri.conf.json','package.json']){const j=JSON.parse(fs.readFileSync(p));j.version=process.argv[1];fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')}" "$V"
+          node -e "const fs=require('fs');const v=process.argv[1];for(const p of ['src-tauri/tauri.conf.json','package.json']){const j=JSON.parse(fs.readFileSync(p));j.version=v;fs.writeFileSync(p,JSON.stringify(j,null,2)+String.fromCharCode(10))}" "$V"
 
       - uses: pnpm/action-setup@v4
         with:
@@ -88,7 +89,7 @@ jobs:
             V="$(node -p "require('./src-tauri/tauri.conf.json').version")"
           fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
-          node -e "const fs=require('fs');for(const p of ['src-tauri/tauri.conf.json','package.json']){const j=JSON.parse(fs.readFileSync(p));j.version=process.argv[1];fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')}" "$V"
+          node -e "const fs=require('fs');const v=process.argv[1];for(const p of ['src-tauri/tauri.conf.json','package.json']){const j=JSON.parse(fs.readFileSync(p));j.version=v;fs.writeFileSync(p,JSON.stringify(j,null,2)+String.fromCharCode(10))}" "$V"
 
       - uses: pnpm/action-setup@v4
         with:
@@ -140,11 +141,26 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
-          if [ -z "${KEYSTORE_BASE64:-}" ]; then
-            echo "::error::缺少 ANDROID_KEY_BASE64 secret，无法签名"; exit 1
-          fi
           KS="$RUNNER_TEMP/release.keystore"
-          echo "$KEYSTORE_BASE64" | base64 -d > "$KS"
+
+          if [ -n "${KEYSTORE_BASE64:-}" ]; then
+            echo "检测到仓库 Secret，使用已有的签名密钥"
+            echo "$KEYSTORE_BASE64" | base64 -d > "$KS"
+            ALIAS="${KEY_ALIAS:?缺少 ANDROID_KEY_ALIAS}"
+            SPASS="${STORE_PASSWORD:?缺少 ANDROID_KEYSTORE_PASSWORD}"
+            KPASS="${KEY_PASSWORD:?缺少 ANDROID_KEY_PASSWORD}"
+          else
+            echo "仓库未配置签名密钥，本次在构建机上现场生成一份临时密钥"
+            ALIAS="hghub"
+            SPASS="hghub-ci-pass"
+            KPASS="hghub-ci-pass"
+            keytool -genkeypair -v \
+              -keystore "$KS" -storetype PKCS12 \
+              -alias "$ALIAS" -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$SPASS" -keypass "$KPASS" \
+              -dname "CN=HGhub CI, OU=Build, O=HGhub, C=CN"
+          fi
+
           BT="$(ls "$ANDROID_SDK_ROOT/build-tools" | sort -V | tail -1)"
           APKSIGNER="$ANDROID_SDK_ROOT/build-tools/$BT/apksigner"
           mkdir -p artifacts
@@ -153,8 +169,8 @@ jobs:
             abi="$(basename "$(dirname "$(dirname "$f")")")"
             out="artifacts/HGhub_${VERSION}_${abi}.apk"
             "$APKSIGNER" sign \
-              --ks "$KS" --ks-key-alias "$KEY_ALIAS" \
-              --ks-pass "pass:$STORE_PASSWORD" --key-pass "pass:$KEY_PASSWORD" \
+              --ks "$KS" --ks-key-alias "$ALIAS" \
+              --ks-pass "pass:$SPASS" --key-pass "pass:$KPASS" \
               --v4-signing-enabled false \
               --out "$out" "$f"
             "$APKSIGNER" verify --print-certs "$out" | head -3
@@ -187,7 +203,7 @@ jobs:
             V="$(node -p "require('./src-tauri/tauri.conf.json').version")"
           fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
-          node -e "const fs=require('fs');for(const p of ['src-tauri/tauri.conf.json','package.json']){const j=JSON.parse(fs.readFileSync(p));j.version=process.argv[1];fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')}" "$V"
+          node -e "const fs=require('fs');const v=process.argv[1];for(const p of ['src-tauri/tauri.conf.json','package.json']){const j=JSON.parse(fs.readFileSync(p));j.version=v;fs.writeFileSync(p,JSON.stringify(j,null,2)+String.fromCharCode(10))}" "$V"
 
       - uses: pnpm/action-setup@v4
         with:
